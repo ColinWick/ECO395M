@@ -2,7 +2,10 @@
 title: "HW1"
 author: "Colin Wick"
 date: "1/22/2021"
-output: html_document
+output:
+  html_document: default
+  md_document:
+    variant: markdown_github
 ---
 
 ## Question 1
@@ -298,6 +301,8 @@ k_65 <- rmse_65[rmse_65$rmse_65 == min(rmse_65$rmse_65),"k"]
 
 ```{r,warning=FALSE}
 library("viridis")  
+library("tidyverse")  
+
 
 model_plot <- sclass %>% 
   filter(trim %in% c("350","63 AMG")) %>%
