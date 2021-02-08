@@ -302,7 +302,11 @@ k_65 <- rmse_65[rmse_65$rmse_65 == min(rmse_65$rmse_65),"k"]
 ```{r,warning=FALSE}
 library("viridis")  
 library("tidyverse")  
-
+library("tidyverse")
+library("caret") 
+library("foreach")
+library("modelr")
+library("rsample")
 
 model_plot <- sclass %>% 
   filter(trim %in% c("350","63 AMG")) %>%
