@@ -3,7 +3,6 @@ title: "HW1"
 author: "Colin Wick"
 date: "1/22/2021"
 output:
-  html_document: default
   md_document:
     variant: markdown_github
 ---
