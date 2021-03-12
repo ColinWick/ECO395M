@@ -1,0 +1,359 @@
+---
+title: "Assignment 2"
+author: "Colin Wick"
+date: "3/8/2021"
+output: github_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning=FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggridges)
+library(caret)
+library(mosaic)
+library(modelr)
+library(rsample)
+
+```
+# Problem 1
+
+## Day of Week
+
+```{r}
+cap <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/capmetro_UT.csv")
+```
+
+```{r,cache=TRUE,fig.width=9,fig.height=5}
+cap <- cap %>% 
+  mutate(day_of_week = fct_relevel(day_of_week,c("Sun","Mon","Tue","Wed","Thu","Fri","Sat")))
+
+cap %>%
+  group_by(hour_of_day,month,day_of_week) %>%
+  summarize(avg_board = mean(boarding)) %>%
+  ggplot()+
+  stat_summary(aes(hour_of_day,avg_board,color=month),size=1,geom = "line",fun = "mean")+
+  facet_grid(.~day_of_week)+
+  geom_vline(xintercept = c(9.5,16.5))
+```
+
+This plot shows average number of boardings per 15-minute interval over the course of the week, broken out by month. Each section of the line represents Weekend days have significantly lower average boarding all day. For weekdays, there are similar boarding peaks every day, around 4:30 pm. Interestingly, there is not as much evidence for a commute-to-work peak, with a mostly smooth increase in morning boarding. 
+
+Since this is 1 year of data, each section of each line represents between 4 and 5 ridership days. Labor Day falls on a Monday in September every year, which is causing significantly lower average ridership in September systematically. This same logic applies to Wed-Fri in November because of the Thanksgiving holiday.
+
+\newpage
+
+## Relationship w Temperature
+
+```{r,fig.height=6,fig.width=9,cache=TRUE}
+cap %>%
+  ggplot()+
+  geom_point(aes(temperature,boarding,color=weekend),alpha=.2)+
+  geom_smooth(aes(temperature,boarding,color=weekend),method = lm)+
+  facet_wrap(facets = cap$hour_of_day,ncol = 4)
+```
+
+This plot compares temperature and boarding time, broken out by weekend and non-weekend days and hour of day. There appears to be a weak relationship on weekdays between temperature and boarding, suggesting that students may opt out of riding the bus when temperate but are more likely when it is hot out. This relation ship is weak, at best, on weekdays and non existent on weekends.
+
+\newpage
+
+# Problem 2
+
+```{r,cache=TRUE}
+sara <- mosaicData::SaratogaHouses
+
+sara %>%
+  mutate(l_price = log(price)) %>%
+  ggplot()+
+  geom_histogram(aes(x=price))
+```
+
+First, checking the dependent variable for any necessity to scale or transform. Abnormality can be dealt with by standardization or log-transforming the variable. However, the distribution does not appear to deviate from a normal distribution enough to warrant a transformation.
+
+```{r,cache=TRUE}
+lm_rmse <- c()
+
+ggplot(data=sara)+
+  geom_histogram(aes(x=bathrooms))
+
+for(i in c(1:50)){
+sara_split <- initial_split(sara, prop = 0.8)
+sara_train <- training(sara_split)
+sara_test <- testing(sara_split)
+
+lm_medium = lm(price ~ 1, data=sara_train)
+lm_step <- step(lm_medium,scope = ~ (lotSize + poly(age,2) + poly(livingArea,2) + pctCollege +	fireplaces + rooms + heating + fuel + centralAir + poly(bathrooms,2) + poly(bedrooms,2))^2,direction = "forward",trace = 0)
+lm_rmse[i] <- rmse(lm_step,sara_test)
+}
+
+print(paste("Over 50 splits, forward step regression reached an average RMSE of,",round(mean(lm_rmse),2),"with standard error of",round(sd(lm_rmse),2),sep = " "))
+```
+Testing a forward linear model with interactions and a few polynomial terms, the upper bound of this data appears to be roughly an R-squared of .6, give or take depending on the seed of the forward regression, polynomial terms included, and number of interactions. 
+
+```{r,cache=TRUE}
+scale_vars <- names(sara)[c(1:10)]
+
+sara_scl <- sara %>%
+  as.tibble() %>%
+  mutate(across(c(2:10),.fns = scale),
+         gas = ifelse(fuel=="gas",1,0),
+         electric = ifelse(fuel=="electric",1,0),
+         oil = ifelse(fuel=="oil",1,0),
+         waterfront = ifelse(waterfront=="Yes",1,0),
+         newConstruction = ifelse(newConstruction=="Yes",1,0),
+         centralAir = ifelse(centralAir=="Yes",1,0))
+
+sd_knn_rmse <- c()
+avg_knn_rmse <- c()
+knn_rmse <- c()
+
+
+
+k_list <- c(seq(1:20))^2
+
+for(f in c(1:length(k_list))){
+for(i in c(1:50)){
+sara_split <- initial_split(sara_scl, prop = 0.8)
+sara_train <- training(sara_split)
+sara_test <- testing(sara_split)
+
+sara_knn <- knnreg(price ~ .,data = sara_train,k = k_list[f])
+knn_rmse[i] <- rmse(sara_knn,sara_test)
+    }
+avg_knn_rmse[f] <- mean(knn_rmse)
+sd_knn_rmse[f] <- sd(knn_rmse)
+}
+```
+
+Reformatting factor variables as dummies and standardizing numeric variables, we construct a knn model and test for optimal k by iterating on a list of k values. Constructing a matrix of mean & sd of RMSE we can compare k values and the linear model directly.
+
+```{r,cache=TRUE}
+data.frame(cbind(k_list,avg_knn_rmse,sd_knn_rmse)) %>%
+  ggplot()+
+  geom_line(aes(k_list,avg_knn_rmse,color="knn"),
+            size=1)+
+  geom_errorbar(aes(x=k_list,ymin=avg_knn_rmse-sd_knn_rmse, ymax=avg_knn_rmse+sd_knn_rmse,color="knn"),
+                size=1,
+                alpha=.4,
+                width=10)+
+  geom_point(aes(y = mean(lm_rmse),x=50,color="linear"),
+            size=1)+
+  geom_errorbar(aes(x = 50,ymin= mean(lm_rmse)-sd(lm_rmse), ymax=mean(lm_rmse)+sd(lm_rmse),
+             color="linear"),
+             size=1,
+             alpha=.4,
+             width=10)+
+  labs(y="RMSE",
+       x="k-level",
+       title = "RMSE Comparison Across KNN and Linear models",
+       subtitle = "50 replications per model to calculate error bars")+
+  xlim(0,400)+
+  scale_color_manual(labels = c("knn", "linear"),values=c("tomato","green4"))
+
+### Using k=100 because statistically equal from from k=5
+
+sara_knn <- knnreg(price ~ .,data = sara_train,k = 5)
+```
+
+Depending on the run, the linear model and k = 5 could be argued to be similar. Since the low-end of the linear model and the high-end of the knn model barely touch, if at all, then on average the knn model with k=5 should be used.
+
+Taking this as the model, the best predictive model of house value is the houses most similar to itself across multiple dimensions. The linear model could be thought of as a composite of discrete home elements and some interactions of those elements as comprising home value. This model is not as effective as a model which compares the most generally similar homes to the one in question.
+
+# Problem 3
+
+```{r,cache=TRUE}
+ger <- read.csv(url("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/german_credit.csv"))
+```
+
+```{r}
+ger %>%
+  group_by(history) %>%
+  summarise(avg_default = mean(Default),
+            sd_default = sd(Default)) %>%
+  ggplot()+
+  geom_bar(aes(y=history,x=avg_default),stat = "identity")+
+  geom_errorbar(aes(y=history,xmin=avg_default-sd_default,xmax=avg_default+sd_default))
+```
+
+```{r}
+f1 <- formula(Default ~ duration + amount + installment + age + history + purpose + foreign)
+model1 <- glm(data=ger,f1,family = binomial(link = "logit"))
+
+summary(model1)
+```
+
+A logit model including history variables finds that low-credit applicants tend to default systematically less than high-credit applicants. This seems intuitively incorrect. A first guess is that the bank's "similar sample" across mid and high credit tended to pick cases where high credit accounts defaulted on loans rather than an even selection of all loans. 
+
+By selecting for good-credit loans that defaulted, the model finds that, for a given loan, low- or mid- credit borrowers are significantly more likely to pay back the loan. One way to confirm this bias in the data is to construct a confusion matrix, which will see whether the model is effectively re-categorizing the data.
+
+```{r}
+predict_default <- predict(model1)
+confusion <- table(y=ger$Default,yhat=ifelse(predict_default > .5,1,0))
+
+confusion
+print(paste("Out-of_sample performance:",sum(diag(confusion))/sum(confusion),sep =" "))
+```
+
+The model is doing a good job of predicting values, meaning that the underlying dataset is skewed or it is actually the case that lower credit scores predict lower chance of default.
+
+```{r}
+ger %>%
+  mutate(amt_bin = cut(amount, seq(0, max(amount), 250), right = FALSE)) %>%
+  group_by(history,amt_bin) %>%
+  summarize(avg_default = mean(Default),
+            amount = min(amount)) %>%
+  ggplot()+
+  geom_jitter(aes(x=amount,y = avg_default,color=history))+
+  geom_smooth(aes(x=amount,y = avg_default,color=history),method = "lm")
+```
+
+```{r}
+ger %>%
+  mutate(duration_code = case_when(duration %in% c(1:12) ~ "Short",
+                                   duration %in% c(13:24) ~ "Medium",
+                                   duration %in% c(25:36) ~ "Long",
+                                   TRUE ~ "Very Long"),
+         Default = factor(ger$Default,levels = c("0","1"),labels = c("NotDefault","Default"))) %>%
+  ggplot(aes(x = amount, y = history, fill = factor(stat(quantile))))+
+  stat_density_ridges(
+    geom = "density_ridges_gradient",
+    calc_ecdf = TRUE,
+    quantiles = 5,
+    quantile_lines = TRUE)+
+  scale_fill_viridis_d(name = "Quartiles")+
+    facet_grid(duration_code~Default)
+```
+
+The two plots above illustrate this point clearly. In the first plot we see average default rates within bins of $250 which clearly demonstrate a systematic bias towards "good" loans which defaulted in the dataset. At all loan sizes, good credit loans are worse-performing than poor credit.
+
+The second plot shows the similarities between default and non-default loans. Specficially, showing the similarities between credit history and multiple dimensions of the loans including default rate, duration, and amount. From here it is obvious that the selection criteria for these loans was focused too much on matching the qualities of good and poor credit loans rather than random sampling. 
+
+In the future, the best predictive model would be one with a truly randomized sample, so there is no selection for any other qualities. Under the data provided by the bank, a naive data scientist would recommend the bank only give loans to poor and terrible credit clients, while avoiding good credit. This is obviously not the right recommendation. 
+
+# Problem 4
+
+```{r,cache=TRUE}
+hd <- read.csv(url("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/hotels_dev.csv"))
+hv <- read.csv(url("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/hotels_val.csv"))
+
+hd <- hd %>%
+  mutate(meal = factor(meal),
+         market_segment = factor(market_segment),
+         distribution_channel = factor(distribution_channel),
+         reserved_room_type = factor(reserved_room_type),
+         customer_type = factor(customer_type),
+         deposit_type = factor(deposit_type),
+         hotel = factor(hotel),
+         required_car_parking_spaces = factor(required_car_parking_spaces),
+         corp_mkt = ifelse(market_segment == "Corporate",1,0),
+         month = as.factor(month(as.Date(arrival_date,format = "%Y-%m-%d"))))
+    
+hv <- hv %>%
+  mutate(meal = factor(meal),
+         market_segment = factor(market_segment),
+         distribution_channel = factor(distribution_channel),
+         reserved_room_type = factor(reserved_room_type),
+         customer_type = factor(customer_type),
+         deposit_type = factor(deposit_type),
+         hotel = factor(hotel),
+         required_car_parking_spaces = factor(required_car_parking_spaces),
+         corp_mkt = ifelse(market_segment == "Corporate",1,0),
+         month = as.factor(month(as.Date(arrival_date,format = "%Y-%m-%d"))))
+
+```
+
+```{r,cache=TRUE}
+probit_results <- data.frame()
+
+
+for(i in c(1:15)){
+hd_split <- initial_split(hd, prop = 0.8)
+hd_train <- training(hd_split)
+hd_test <- testing(hd_split)
+
+probit_small <- glm(data=hd_train,
+                children ~ market_segment + adults + customer_type + is_repeated_guest
+                ,family = "binomial")
+
+probit_large <- glm(data=hd_train,children ~ (. - arrival_date),family = "binomial")
+
+#mid_formula <- formula(children ~ corp_mkt + deposit_type + is_repeated_guest)
+
+mid_formula <- formula(children ~ . - arrival_date + month + (required_car_parking_spaces + customer_type +  booking_changes + hotel)*(corp_mkt + adults + lead_time)+ total_of_special_requests * stays_in_weekend_nights + stays_in_week_nights)
+
+probit_mid <- glm(data=hd_train,formula=mid_formula,family = "binomial")
+
+probit_results[i,1] <- round(sum(diag(table(ifelse(predict(probit_small,hd_test)>.5,1,0),hd_test$children)))/8999,4)
+probit_results[i,2] <-round(sum(diag(table(ifelse(predict(probit_mid,hd_test)>.5,1,0),hd_test$children)))/8999,4)
+probit_results[i,3] <-round(sum(diag(table(ifelse(predict(probit_large,hd_test)>.5,1,0),hd_test$children)))/8999,4)
+}
+
+colnames(probit_results) <- c("small","custom","large")
+round(colMeans(probit_results,na.rm = TRUE),3)
+
+```
+
+As a first comparison metric between models, out-of-sample accuracy shows which model is best predicting known values. From this, large and custom models have roughly similar performance. After significant tinkering, very little extra performance can be squeezed out of this data but "custom" slightly outperforms "large". 
+
+```{r}
+probit_test = predict(probit_mid, hv, type='response')
+thresh_grid = seq(0.05, 0.95, by=0.005)
+pos_actual <- sum(hv$children)
+
+ROC_table <- data.frame()
+
+
+for(i in c(1:length(thresh_grid))){
+  confus <- table(yhat = ifelse(probit_test > thresh_grid[i],1,0),
+                  yact = hv$children)
+  tpr <- confus[2,2]/pos_actual
+  fpr <- confus[2,1]/pos_actual
+ROC_table <- rbind(ROC_table,c(thresh_grid[i],tpr,fpr))
+  
+}
+names(ROC_table) <- c("t","tpr","fpr")
+
+ROC_table %>%
+  ggplot()+
+  geom_line(aes(x=fpr,y=tpr))
+```
+
+This ROC curve demonstrates that the model is severely overpredicting children systematically. At lower thresholds this problem is mitigated somewhat and there is genuinely good performance on the left side of this model. Further revisions need to account for this issue.
+
+```{r}
+hv$fold <- shuffle(rep(c(1:20),250))[1:4999]
+hv$yhat <- predict(probit_mid,hv,type = "response")
+
+mean_diff <- hv %>%
+  group_by(fold) %>%
+  summarize(exp_child = sum(yhat),
+            act_child = sum(children)) %>%
+  summarise(diff = act_child-exp_child) %>%
+  summarize(mean_diff = mean(diff))
+
+hv %>%
+  group_by(fold) %>%
+  summarize(exp_child = sum(yhat),
+            act_child = sum(children),
+            diff = act_child-exp_child,
+            mean_diff = mean(diff)) %>%
+  ggplot()+
+  geom_bar(aes(x=fold,y=act_child-exp_child),stat="identity")+
+  geom_hline(yintercept = as.numeric(mean_diff),color="maroon",size=2,alpha=.4)+
+  labs(y="Actual Minus Predicted",
+       x="Fold ID",
+       title = "20-fold Predicted vs. Actual Values",
+       subtitle = "Average difference shown as red line")
+
+rm(hd)
+rm(hv)
+```
+
+A further method of cross validation is creating 20 randomized folds in the data and predicting expected children, then comparing to the actual values in the data. The visualization above shows the difference across all 20 folds and an average line which consistently shows up around -1. This is consistent with the above hypothesis that the model is systematically overpredicting the presence of children in a given reservation.
+
+Not pictured above is replications of the analysis above across multiple re-folds and comparison with the "large" model proposed in the question. Across both of these breakdowns the same ~1 case overprediction took place systematically.
