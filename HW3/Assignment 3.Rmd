@@ -1,0 +1,377 @@
+---
+title: "Assignment 3"
+author: "Colin Wick"
+date: "4/2/2021"
+output: github_document
+always_allow_html: true
+---
+
+```{r}
+knitr::opts_chunk$set(echo = F,cache = T,message = F,warning = F,background = T)
+library(tidyverse)
+library(caret)
+library(plm)
+library(modelr)
+library(car)
+library(rsample)
+library(splines)
+library(rpart)
+library(rpart.plot)
+```
+
+# Question 1
+
+## 1.
+
+Running that regression doesn't take into account city-specific effects, network effects of police infrastructure, or whether the causal question points in some other direciton.
+
+## 2.
+
+The researchers used terrorism threat as an instrument to estimate the effect of more police in a way that untangles the correlation issue. Terrorism threat will not have an influence on whether there is crime other than the exogenous increase in number of police. 
+
+
+## 3. 
+
+They then control for metro ridership to ensure that the underlying population on the street of a given day stays the same. If ridership was significantly lower, then terrorism threat could be understood to have an effect on the crime-commission-side of the police question.
+
+## 4. 
+
+District 1 is the region surrounding the Federal Government parts of Washington, D.C. (i.e. Congress, White House, and agencies). The other districts are residential & commerical, normal city-type areas. Under a higher terrorism threat, District 1 will see an increased presence of police compared to the rest of the city, so comparing that district to the rest of the city shows the difference in crime under an exogenous increase. In this case they find a ~2 crime decrease based on increase in police presence.
+
+# Question 2
+
+```{r}
+grn <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/greenbuildings.csv")
+
+grn <- grn %>%
+  mutate(green_cert = as.factor(ifelse(LEED == 1 | Energystar == 1,1,0)),
+         std_size = scale(size),
+         std_rent = scale(Rent),
+         l_size = log(size),
+         l_rent = log(Rent),
+         empl_bucket = case_when(empl_gr < 1.740 ~ "low",
+                                 empl_gr > 2.380 ~ "high",
+                                 TRUE ~ "mid"),
+         rent_diff = Rent - City_Market_Rent,
+         class = case_when(class_a == 1 ~ "a",
+                           class_b == 1 ~ "b",
+                           TRUE ~ "c"),
+         tot_rev = Rent * leasing_rate,
+         l_tot_rev = ifelse(log(tot_rev) == -Inf,NA,log(tot_rev)))
+```
+
+Feature Engineering notes:
+
+- green_cert: Collapse LEED and EnergyStar into a single variable for simplicity (assumes "any green cert" is more valuable than branding of green certs)
+
+- create both standardized and log-scaled size & rent measures for use later as necessary
+
+- rent_diff: a "rent differential" variable (the difference between city average and building-specific rent) which may be of use
+
+- class: collapse class vars into one factor variable
+
+- tot_rev: variable of interest (leasing_rate * Rent) & log-scaled version of variable which sends 0-valued leasing rates to NA's due to log-scale constraints.
+
+Goal: Best predictive model possible for revenue per square foot per calendar year. Estimate of Green Certification returns.
+
+```{r}
+grn %>%
+  ggplot() +
+  geom_histogram(data=subset(grn,green_cert==1),aes(x=l_rent),alpha=.3,fill="green")+
+  geom_histogram(data=subset(grn,green_cert==0),aes(x=l_rent),alpha=.3,fill="blue")+
+  geom_vline(xintercept = mean(grn$l_rent[grn$green_cert==0]),size=2,color="blue")+
+  geom_vline(xintercept = mean(grn$l_rent[grn$green_cert==1]),size=2,color="green")+
+  ggtitle("Superficial comparison between green_cert values")
+```
+
+First things first, we need to establish whether there is a superficial relationship between green buildings and rent. Comparing distributions and difference in means, it looks like there is a small relationship  before any sort of interactions or covariates are introduced.
+
+```{r}
+grn %>%
+  ggplot()+
+  geom_jitter(aes(l_rent,leasing_rate,color=green_cert),alpha=.1)+
+  geom_smooth(aes(l_rent,leasing_rate,color=green_cert),method = "lm")+
+  facet_grid(empl_bucket ~ .)
+```
+
+Comparing leasing rent to rent, there is a direct relationship between the two and the magnitude seems to be roughly different across economic growth regions. "High" represents the upper quartile of economic growth regions in the dataset, "low" being the lower quartile, and "mid" containing the rest. Across these dimensions there seems to be a slight difference in slope based on these factors.
+
+```{r}
+#summary(lm(data=grn,formula = l_tot_rev ~ l_size + leasing_rate + std_rent + empl_bucket + renovated + age + age^2 + amenities + green_cert + green_cert * (Gas_Costs * hd_total07 + cd_total_07*Electricity_Costs)))
+
+summary(plm(data=grn,formula = l_tot_rev ~ l_size + leasing_rate + std_rent + empl_bucket + renovated + age + age^2 + amenities + green_cert + (Gas_Costs * hd_total07 + cd_total_07*Electricity_Costs),index=c("cluster"),model = "within"))
+```
+
+Setting up a "simple" model using all variables and interactions which seem to be obviously important in determining rent. This includes linear terms for most variables. Age squared is included because this tends to be an important factor in questions of age. I interact cooling days with electricity & heating days with gas because these are the times which those variables are jointly relevant. 
+
+Immediately, we achieve an R^2 value of .77 and a significant (F-stat) model for predicting the rent. Then, we apply a panel regression format to the model, accounting for within-cluster variation in revenue. This reduces the overall predictive value of the model but accounts for important variation that must be accounted for. One way to account for this setup is to interact "cluster" when building a black-box or ML predictive model later in the process.
+
+```{r}
+grn_split <- initial_split(grn,prop = .8)
+grn_train <- training(grn_split)
+grn_test <- testing(grn_split)
+
+lm_formula <- formula(tot_rev ~ l_size + l_rent + empl_bucket + renovated + age + age^2 + amenities + cluster + LEED + Energystar + (Gas_Costs * hd_total07 + cd_total_07*Electricity_Costs))
+basic_lm <- lm(data=grn_train,formula = lm_formula)
+stepped_add_lm <- step(basic_lm,scope = ~ (cluster + green_cert) * (.),direction = "both",trace = 0)
+stepped_sq_lm <- step(basic_lm,scope = ~ (cluster + green_cert) * (.)^2,direction = "both",trace = 0)
+
+tree_formula <- formula(tot_rev ~ l_size + l_rent + empl_bucket + renovated + age + age^2 + amenities + LEED + Energystar + Gas_Costs + hd_total07 + cd_total_07 + Electricity_Costs + cluster)
+
+tree_model <- rpart(formula = tree_formula,data=grn_train,control = rpart.control(minsplit = 20,cp = .0001))
+```
+
+In this step I set up a simple linear regression model, then introduced a large step regression model. The basic linear model has a lot of benefits in terms of interpretability while the step regression allows us to struggle towards better predictive performance at the expense of elegance. The final model incorporated is a large tree model, which we can expect to have the best predictive performance but lowest interpretability.
+
+Though somewhat colinear with total revenue, log-rent was included because it is theoretically a choice variable. Leasing rate was excluded because it is not a choice variable.
+
+```{r}
+#r_sq_step <- data.frame(stepped_sq_lm$fitted.values,stepped_sq_lm$model$l_tot_rev)
+#names(r_sq_step) <- c("fitted","actual")
+
+#plot(basic_lm)
+#r_sq_step %>%
+#  ggplot()+
+#  geom_jitter(aes(actual,fitted),color="tomato",alpha=.1)+
+#  geom_smooth(aes(actual,fitted),color="tomato",method = "lm")+
+#  geom_jitter(aes(basic_lm$model$l_tot_rev,basic_lm$fitted.values),color="navy",alpha=.2)+
+#  geom_smooth(aes(basic_lm$model$l_tot_rev,basic_lm$fitted.values),color="navy",method="lm")
+
+model_diagnostics <- data.frame(matrix(ncol = 3,nrow = 4)) %>%
+  setNames(c("Model Type","RMSE","RSquared"))
+
+model_diagnostics[,1] <- c("stepped_sq","stepped_add","lm","tree")
+model_diagnostics[,2] <- c(rmse(data=grn_test,stepped_sq_lm),
+                           rmse(data=grn_test,stepped_add_lm),
+                           rmse(data=grn_test,basic_lm),
+                           rmse(data=grn_test,tree_model))
+model_diagnostics[,3] <- c(rsquare(data=grn_test,stepped_sq_lm),
+                           rsquare(data=grn_test,stepped_sq_lm),
+                           rsquare(data=grn_test,basic_lm),
+                           rsquare(data=grn_test,tree_model))
+
+model_diagnostics
+```
+
+After running the tree, "messy" squared step model, cleaner "additive" step model, and the "simple" lm model, the tree appears to reduce RMSE by 1/2 and increase R Squared by more than 10%. For the purposes of prediction, this is the best model to use.
+
+```{r}
+data.frame(tree_model$variable.importance)
+
+grn$predicted <- predict(tree_model,newdata = grn)
+
+library(Manu)
+Takahe <- get_pal("Takahe")
+
+grn %>%
+  mutate(residual = tot_rev - predicted) %>%
+  ggplot() + 
+  geom_point(aes(x=tot_rev, y=residual,color=predicted),alpha=.5) + 
+  scale_color_gradientn(aesthetics="color",colors=Takahe[c(1:4)])+
+  geom_smooth(aes(x=tot_rev, y=residual),alpha=.2,method = "lm")
+```
+
+Plotting tot_rev (our key outcome variable) against residual values, the model is remarkably good at fitting the center of the data but falls apart towards the right tail of the distribution. The line is plotted to show any systemic bias in the model. In general, the model underpredicts more expensive revenues. 
+
+The tree "variable importance" metric shows an estimate of the effects of each variable on the predictive value of the tree. However, Tree models do not lend themselves well to marginal effects or statistical significance in the traditional regression sense, so if we refer to our strongest regression we can establish the effects of green certification in the next section.
+
+```{r}
+step_coef <- summary(stepped_sq_lm)
+step_coef <- data.frame(step_coef$coefficients)
+step_coef$var <- rownames(step_coef)
+
+estimates <- data.frame(matrix(nrow = 4,ncol = 3))
+estimates[1,] <- margins::dydx(model=stepped_sq_lm,variable = "LEED",data=grn) %>%
+  summarize(avg_margin = mean(dydx_LEED),
+            sd_margin = sd(dydx_LEED)/sqrt(length(dydx_LEED)),
+            pval = round(t.test(dydx_LEED)$p.value,4))
+estimates[3,] <- margins::dydx(model=stepped_sq_lm,variable = "Energystar",data=grn) %>%
+  summarize(avg_margin = mean(dydx_Energystar),
+            sd_margin = sd(dydx_Energystar)/sqrt(length(dydx_Energystar)),
+            pval = round(t.test(dydx_Energystar)$p.value,4))
+estimates[2,] <- step_coef[str_detect(step_coef$var,pattern = "LEED"),][1,c(1,2,4)]
+estimates[4,] <- step_coef[str_detect(step_coef$var,pattern = "Energy"),][1,c(1,2,4)]
+row.names(estimates) <- c("LEED_Marginal","LEED","Energystar_Marginal","Energystar")
+names(estimates) <- c('estimate','sd',"pval")
+
+kableExtra::kbl(round(estimates,3),digits = 3) %>%
+  kableExtra::kable_classic_2()
+```
+
+Referring back to the strongest OLS model, we see that, on the margin, there is a return to LEED & Energystar certification. Breaking them out was important because we see the overall returns to energystar are much lower overall. The effects of certification are broken out 2 ways. First, looking at averages, LEED has (on average) is assocated with an extremely wide range of revenues, all positive. Energystar is associated with a more modest increase. 
+
+However, these sample averages, though extracted from a regression with many controls, do not tell the whole story. Another perspective is looking on the margin. From this perspective, the question is "given all else equal, what happens if a given building moves from not-LEED to LEED?" which tells a different story. LEED buildings have roughly \$610-640 higher revenue per sqft if they achieve certification on the margin. Similarly, but smaller magnitude, Energystar certification is worth $66 per sqft on the margin.
+
+
+# Question 3
+
+```{r}
+cah <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/CAhousing.csv")
+cah$index <- c(1:nrow(cah))
+```
+
+```{r}
+ca_map <- map_data("county","California")%>% 
+  select(lon = long, lat, group, id = subregion)
+```
+
+
+## Part 1
+
+```{r}
+attach(cah)
+
+cah %>%
+  ggplot()+
+  geom_polygon(data = ca_map, aes(lon, lat, group = group),fill="white",color="grey50")+
+  geom_point(aes(x=longitude,y=latitude,color=medianHouseValue))+
+  scale_color_gradientn(colours = Takahe)+  
+  xlim(-127,-111)+
+  theme_bw()
+```
+
+First, just plotting median house value against long-lat to see if any immediately visible features of the data arise. From here it's clear that splines will be necessary for long-lat since there is a bimodal peak of median house value around the Bay area and Los Angeles.
+
+```{r}
+cah_scale <- data.frame(cah[,c(1,2,9)],apply(cah[,c(3:8)],2,scale))
+cah_scale <- cah_scale %>%
+  mutate(knn_score = housingMedianAge+medianIncome+households+population+totalBedrooms+totalRooms)
+
+cah_scale %>%
+  ggplot()+
+  geom_point(aes(latitude,medianHouseValue))+
+  geom_smooth(aes(latitude,medianHouseValue),formula = y ~ splines::ns(x,2))
+
+knn_rmse <- data.frame()
+
+k_val <- seq(1,15,by=1)^2
+knnformula <- formula(medianHouseValue ~ housingMedianAge+medianIncome+households+population+totalBedrooms+totalRooms+splines::ns(longitude,2)+splines::ns(latitude,2))
+for(k in c(1:15)){
+knn_rmse[k,1] <- k_val[k]
+  for(i in c(1:20)){
+cah_split = initial_split(cah_scale,.7)
+cah_train = training(cah_split)
+cah_test = testing(cah_split)
+
+knn_rmse[k,i+1] <- rmse(knnreg(formula=knnformula,data=cah_train,k=k_val[k]),data=cah_test)
+knn_rmse$model_type[k] <- 'knn'
+  }
+}
+```
+
+```{r}
+cp_vector <- seq(.0001,.00106,by=.00006)
+
+for(k in c(1:15)){
+for(i in c(1:20)){
+knn_rmse[15+k,1] <- cp_vector[k]
+cah_split = initial_split(cah_scale,.7)
+cah_train = training(cah_split)
+cah_test = testing(cah_split)
+
+cah_tree <- rpart(knnformula,data = cah_train,control = rpart.control(cp = cp_vector[k],minsplit = 30))
+knn_rmse[15+k,i+1] <- rmse(cah_tree,cah_test)
+knn_rmse$model_type[15+k] <- "tree"
+}
+}
+
+olsformula <- formula(medianHouseValue ~ housingMedianAge+medianIncome+households+population+totalBedrooms+totalRooms+splines::ns(longitude,2)+splines::ns(latitude,2))
+
+for(i in c(1:20)){
+cah_split = initial_split(cah_scale,.7)
+cah_train = training(cah_split)
+cah_test = testing(cah_split)
+
+cah_ols <- lm(knnformula,data = cah_train)
+cah_ols <- step(cah_ols,scope = ~(.)^2,trace = 0,direction = "both")
+knn_rmse[31,i+1] <- rmse(cah_ols,cah_test)
+knn_rmse$V1[31] <- 50 
+knn_rmse$model_type[31] <- "OLS"
+}
+
+knn_rmse %>%
+  pivot_longer(cols = -c(V1,model_type)) %>%
+  rename("k" = "V1") %>%
+  group_by(k,model_type) %>%
+  mutate(k = as.numeric(k)) %>%
+  summarize(avg_rmse = mean(value),
+            sd_rmse = sd(value)) %>%
+  ggplot()+
+  geom_point(aes(x=k,y=avg_rmse,color=model_type),size=2)+
+  geom_errorbar(aes(x=k,ymin=avg_rmse-sd_rmse,ymax=avg_rmse+sd_rmse,color=model_type))+
+  scale_color_manual(aesthetics = "color",values = c("gold4","maroon1","purple1"))+
+  ggtitle("RMSE of 3 model types, 20 cross validations","k is hyperparameter for relevant models")
+
+knn_rmse %>%
+  pivot_longer(cols = -c(V1,model_type)) %>%
+  rename("k" = "V1") %>%
+  group_by(k,model_type) %>%
+  mutate(k = as.numeric(k)) %>%
+  summarize(avg_rmse = mean(value),
+            sd_rmse = sd(value)) %>%
+  ggplot()+
+  geom_point(aes(x=k,y=avg_rmse,color=model_type),size=2)+
+  geom_errorbar(aes(x=k,ymin=avg_rmse-sd_rmse,ymax=avg_rmse+sd_rmse,color=model_type))+
+  scale_color_manual(aesthetics = "color",values = c("gold4","maroon1","purple1"))+
+  xlim(.0001-.00005,.00106)+
+  ggtitle("Zoom-in on tree model k-values")
+
+avg_rmse <- knn_rmse %>%
+  pivot_longer(cols = -c(V1,model_type)) %>%
+  rename("k" = "V1") %>%
+  group_by(k,model_type) %>%
+  mutate(k = as.numeric(k)) %>%
+  summarize(avg_rmse = mean(value),
+            sd_rmse = sd(value))
+avg_rmse[avg_rmse$avg_rmse==min(avg_rmse$avg_rmse),]
+```
+
+The two charts above show mean RMSE across 20 cross validations for 3 different model types and 15 hyperparameter tunings.
+
+Iterating 20 cross validations of 15 tree parameters, a large OLS Step regression, and 15 knn parameters, the best model available is the tree model. Using a tree model we find that cp = .00046 produces the best model since it is statistically indistinguishable from the lowest value but less computationally intensive.
+
+A knn model may find interactions and assocations in the data and OLS is most easily interpretable, which are unique benefits to each. However, for the purpose of pure prediction, tree is best in this case.
+
+```{r}
+tree_use <- rpart(knnformula,data = cah_train,control = rpart.control(cp = .00046,minsplit = 30))
+
+cah$predicted <- predict(tree_use,newdata = cah_scale)
+
+cah %>%
+  select(longitude,latitude,predicted,medianHouseValue) %>%
+  pivot_longer(-c(longitude,latitude)) %>%
+  ggplot()+
+  geom_polygon(data = ca_map, aes(lon, lat, group = group),fill="white",color="grey50")+
+  geom_point(aes(x=longitude,y=latitude,color=value))+
+  scale_color_gradientn(colours = Takahe)+
+  facet_grid(. ~ name) +
+  theme_bw()
+```
+
+From a quick visual perspective, the model appears to perform very well in general. For the most part, there is the same regional distinction and scale of difference between regions. It's immediately obvious, however, that this model compressed variation across tracts in the same region. For example, looking at particularly high-value (Bay Area/LA) there appears to be some amount of value shaved-off. More inland, the model is predicting slightly higher values than the actual data.
+
+```{r}
+cah %>%
+  select(longitude,latitude,predicted,medianHouseValue) %>%
+  mutate(residuals = predicted-medianHouseValue) %>%
+  select(residuals,longitude,latitude) %>%
+  #pivot_longer(-c(longitude,latitude)) %>%
+  ggplot()+
+  geom_polygon(data = ca_map, aes(lon, lat, group = group),fill="white",color="grey50")+
+  geom_point(aes(x=longitude,y=latitude,color=residuals))+
+  scale_color_gradientn(colours = Takahe)+
+  theme_bw()+
+  xlim(-127,-111)
+```
+The picture above plots residuals against long-lat coordinates. There is a relatively uniform spread of residuals, except for a clear bias on coastal regions, which tended to also have higher median home values. In future models, allowing for engineering, a "distance to coast" variable will serve this dataset well.
+
+```{r}
+cah %>%
+  select(predicted,medianHouseValue) %>%
+  mutate(residual = predicted-medianHouseValue) %>%
+  ggplot()+
+  geom_point(aes(medianHouseValue,residual,color=predicted),alpha=.1)+
+  geom_smooth(aes(medianHouseValue,residual),method = "lm",formula = y ~ ns(x,2),size=1.5,color="deeppink1")
+```
+
+Finally, confirming the downward bias of this model against high-value tracts. 
