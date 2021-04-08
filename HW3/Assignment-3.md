@@ -268,10 +268,10 @@ pval
 LEED\_Marginal
 </td>
 <td style="text-align:right;">
-215.768
+339.253
 </td>
 <td style="text-align:right;">
-4.497
+5.172
 </td>
 <td style="text-align:right;">
 0.000
@@ -282,13 +282,13 @@ LEED\_Marginal
 LEED
 </td>
 <td style="text-align:right;">
--2128.010
+3594.734
 </td>
 <td style="text-align:right;">
-862.845
+1117.649
 </td>
 <td style="text-align:right;">
-0.014
+0.001
 </td>
 </tr>
 <tr>
@@ -296,10 +296,10 @@ LEED
 Energystar\_Marginal
 </td>
 <td style="text-align:right;">
-102.896
+81.685
 </td>
 <td style="text-align:right;">
-1.365
+0.767
 </td>
 <td style="text-align:right;">
 0.000
@@ -310,13 +310,13 @@ Energystar\_Marginal
 Energystar
 </td>
 <td style="text-align:right;">
-971.026
+569.845
 </td>
 <td style="text-align:right;">
-288.024
+255.686
 </td>
 <td style="text-align:right;">
-0.001
+0.026
 </td>
 </tr>
 </tbody>
@@ -324,20 +324,26 @@ Energystar
 
 Referring back to the strongest OLS model, we see that, on the margin,
 there is a return to LEED & Energystar certification. Breaking them out
-was important because we see the overall returns to energystar are much
-lower overall. The effects of certification are broken out 2 ways.
-First, looking at averages, LEED has (on average) is assocated with an
-extremely wide range of revenues, all positive. Energystar is associated
-with a more modest increase.
+was important because we will see potential branding effects between the
+two certifications. The effects of certification are broken out 2 ways.
+First, looking at averages, LEED is potentially worth thousands of
+dollars per square foot and Energystar hundreds, though this is
+dependent on potential interactions in the model.
 
 However, these sample averages, though extracted from a regression with
 many controls, do not tell the whole story. Another perspective is
 looking on the margin. From this perspective, the question is “given all
 else equal, what happens if a given building moves from not-LEED to
 LEED?” which tells a different story. LEED buildings have roughly
-$610-640 higher revenue per sqft if they achieve certification on the
+$330-350 higher revenue per sqft if they achieve certification on the
 margin. Similarly, but smaller magnitude, Energystar certification is
-worth $66 per sqft on the margin.
+worth $81 per sqft on the margin.
+
+A better way to measure the difference in this case is using the
+marginal effects, since this mode of analysis takes into account
+similarities between buildings and focuses on the effect of moving a
+giving building from non-certified to certified, rather than looking at
+population level averages.
 
 # Question 3
 

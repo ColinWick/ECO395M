@@ -106,19 +106,20 @@ Setting up a "simple" model using all variables and interactions which seem to b
 
 Immediately, we achieve an R^2 value of .77 and a significant (F-stat) model for predicting the rent. Then, we apply a panel regression format to the model, accounting for within-cluster variation in revenue. This reduces the overall predictive value of the model but accounts for important variation that must be accounted for. One way to account for this setup is to interact "cluster" when building a black-box or ML predictive model later in the process.
 
-```{r}
+```{r,cache.rebuild=TRUE}
 grn_split <- initial_split(grn,prop = .8)
 grn_train <- training(grn_split)
 grn_test <- testing(grn_split)
 
 lm_formula <- formula(tot_rev ~ l_size + l_rent + empl_bucket + renovated + age + age^2 + amenities + cluster + LEED + Energystar + (Gas_Costs * hd_total07 + cd_total_07*Electricity_Costs))
 basic_lm <- lm(data=grn_train,formula = lm_formula)
-stepped_add_lm <- step(basic_lm,scope = ~ (cluster + green_cert) * (.),direction = "both",trace = 0)
-stepped_sq_lm <- step(basic_lm,scope = ~ (cluster + green_cert) * (.)^2,direction = "both",trace = 0)
+stepped_add_lm <- step(basic_lm,scope = ~ (.),direction = "both",trace = 0)
+stepped_sq_lm <- step(basic_lm,scope = ~ (.)^2,direction = "both",trace = 0)
 
 tree_formula <- formula(tot_rev ~ l_size + l_rent + empl_bucket + renovated + age + age^2 + amenities + LEED + Energystar + Gas_Costs + hd_total07 + cd_total_07 + Electricity_Costs + cluster)
 
 tree_model <- rpart(formula = tree_formula,data=grn_train,control = rpart.control(minsplit = 20,cp = .0001))
+
 ```
 
 In this step I set up a simple linear regression model, then introduced a large step regression model. The basic linear model has a lot of benefits in terms of interpretability while the step regression allows us to struggle towards better predictive performance at the expense of elegance. The final model incorporated is a large tree model, which we can expect to have the best predictive performance but lowest interpretability.
@@ -176,6 +177,11 @@ Plotting tot_rev (our key outcome variable) against residual values, the model i
 The tree "variable importance" metric shows an estimate of the effects of each variable on the predictive value of the tree. However, Tree models do not lend themselves well to marginal effects or statistical significance in the traditional regression sense, so if we refer to our strongest regression we can establish the effects of green certification in the next section.
 
 ```{r}
+
+basic_lm <- lm(data=grn,formula = lm_formula)
+stepped_add_lm <- step(basic_lm,scope = ~ (.),direction = "both",trace = 0)
+stepped_sq_lm <- step(basic_lm,scope = ~ (.)^2,direction = "both",trace = 0)
+
 step_coef <- summary(stepped_sq_lm)
 step_coef <- data.frame(step_coef$coefficients)
 step_coef$var <- rownames(step_coef)
@@ -196,11 +202,14 @@ names(estimates) <- c('estimate','sd',"pval")
 
 kableExtra::kbl(round(estimates,3),digits = 3) %>%
   kableExtra::kable_classic_2()
+
 ```
 
-Referring back to the strongest OLS model, we see that, on the margin, there is a return to LEED & Energystar certification. Breaking them out was important because we see the overall returns to energystar are much lower overall. The effects of certification are broken out 2 ways. First, looking at averages, LEED has (on average) is assocated with an extremely wide range of revenues, all positive. Energystar is associated with a more modest increase. 
+Referring back to the strongest OLS model, we see that, on the margin, there is a return to LEED & Energystar certification. Breaking them out was important because we will see potential branding effects between the two certifications. The effects of certification are broken out 2 ways. First, looking at averages, LEED is potentially worth thousands of dollars per square foot and Energystar hundreds, though this is dependent on potential interactions in the model. 
 
-However, these sample averages, though extracted from a regression with many controls, do not tell the whole story. Another perspective is looking on the margin. From this perspective, the question is "given all else equal, what happens if a given building moves from not-LEED to LEED?" which tells a different story. LEED buildings have roughly \$610-640 higher revenue per sqft if they achieve certification on the margin. Similarly, but smaller magnitude, Energystar certification is worth $66 per sqft on the margin.
+However, these sample averages, though extracted from a regression with many controls, do not tell the whole story. Another perspective is looking on the margin. From this perspective, the question is "given all else equal, what happens if a given building moves from not-LEED to LEED?" which tells a different story. LEED buildings have roughly \$330-350 higher revenue per sqft if they achieve certification on the margin. Similarly, but smaller magnitude, Energystar certification is worth $81 per sqft on the margin. 
+
+A better way to measure the difference in this case is using the marginal effects, since this mode of analysis takes into account similarities between buildings and focuses on the effect of moving a giving building from non-certified to certified, rather than looking at population level averages.
 
 
 # Question 3
