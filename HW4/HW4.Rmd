@@ -1,0 +1,197 @@
+---
+title: "Excersize 4"
+author: "Colin Wick"
+date: "5/4/2021"
+output: html_document
+---
+
+```{r head,echo = F,message = F,warning = F}
+knitr::opts_chunk$set(echo = F,message = F,warning = F)
+```
+
+```{r the-libs}
+library(tidyverse)
+library(LICORS)
+library(igraph)
+library(arules)
+library(arulesViz)
+```
+
+
+# Question 1
+
+```{r load-data-1}
+wine <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/wine.csv") %>%
+  mutate(red = ifelse(color=="red",1,0))
+```
+
+```{r clustering-wine-color}
+## Color clusters
+wine_col <- wine %>% select(-color,-red)
+wine_col_scl <- scale(wine_col,center = T,scale = T)
+
+wine_col_hcl <- LICORS::kmeanspp(wine_col_scl,2)
+
+merge(wine,wine_col_hcl$cluster,by=0) %>%
+  rename("cluster" = y) %>% mutate(cluster=factor(cluster)) %>%
+  count(cluster,color) %>% group_by(color) %>%
+  mutate(prop = prop.table(n)) %>% select(-n) %>%
+  pivot_wider(id_cols = cluster,names_from = color,values_from = prop) 
+```
+
+```{r clustering-wine-quality}
+qual_levels <- levels(factor(wine$quality))  
+
+wine_col <- wine %>% select(-color) %>% select(-quality) 
+
+wine_col_scl <- scale(wine_col,center = T,scale = T)
+wine_col_dist <- dist(wine_col_scl,method = "euclidean")
+
+set.seed(42069)
+wine_qual_hcl <- kmeanspp(wine_col_scl,k = 7,nstart = 50)
+
+cormatrix <- merge(wine,wine_qual_hcl$cluster,by.x=0,by.y=0) %>% select(-Row.names,-color) %>% cor()
+  ggcorrplot::ggcorrplot(corr = cormatrix)
+  
+merge(wine,wine_qual_hcl$cluster,by.x=0,by.y=0) %>%
+  rename("cluster" = y) %>% mutate(cluster=factor(cluster)) %>%
+  ggplot()+
+  geom_jitter(aes(x=cluster,y=quality,color=color),alpha=.3)
+```
+
+
+```{r PCA-color}
+wine_col <- wine %>% select(-color) %>% select(-red)
+wine_col_scl <- scale(wine_col,center = T,scale = T)
+
+PCAwine = prcomp(wine_col, scale=TRUE, rank=2)
+summary(PCAwine)
+
+PCAwine_summary <- PCAwine$rotation %>%
+  data.frame() %>%
+  rownames_to_column("var")
+
+merge(wine, PCAwine$x[,1:2], by="row.names") %>%
+  ggplot()+
+  geom_violin(aes(x=factor(color),y=PC1))
+
+cormatrix <- merge(wine, PCAwine$x[,1:2], by=0) %>% select(-Row.names,-color) %>% cor()
+  ggcorrplot::ggcorrplot(corr = cormatrix)
+```
+
+```{r PCA-quality}
+wine_col <- wine %>% select(-color) %>% select(-quality)
+wine_col_scl <- scale(wine_col,center = T,scale = T)
+
+PCAwine = prcomp(wine_col, scale=TRUE, rank=7)
+summary(PCAwine)
+
+PCAwine_summary <- PCAwine$rotation %>%
+  data.frame() %>%
+  rownames_to_column("var")
+
+merge(wine, PCAwine$x[,1:3], by="row.names") %>%
+  ggplot()+
+  geom_violin(aes(x=factor(quality),y=PC1,fill="PC1"),alpha=.3)+
+  geom_violin(aes(x=factor(quality),y=PC2,fill="PC2"),alpha=.3)+
+  geom_violin(aes(x=factor(quality),y=PC3,fill="PC3"),alpha=.3)
+
+wine_pca <- merge(wine, PCAwine$x[,1:7], by=0)
+
+lm1 <- lm(data=wine_pca,quality ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7)
+plot(data=wine_pca,quality ~ lm1$fitted.values)
+
+summary(lm1)
+```
+
+# Question 2
+
+```{r}
+sm <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/social_marketing.csv")
+
+sm %>% select(-X,-chatter) %>%
+  colSums() %>% data.frame() %>% arrange(desc(`.`)) %>% head(10) %>%
+  rownames_to_column() %>%
+  rename("Topic" = 1,"Count"=2) %>%
+  kableExtra::kbl() %>%
+  kableExtra::kable_minimal()
+
+top10 <- sm %>% select(-X,-chatter) %>%
+  colSums() %>% data.frame() %>% arrange(desc(`.`)) %>% head(10) %>% rownames()
+```
+
+From here we see the beginnings of the market structure just by looking at aggregate mentions of each topic, but this is not a detailed marketing strategy. 
+
+```{r}
+# This is a good song
+# https://open.spotify.com/track/2ArusOBCO5xbJV6QlreriJ?si=4512886a9b3c4773
+
+sm_net <- sm %>%
+  pivot_longer(-X) %>%
+  mutate(edge = ifelse(value != 0,1,0)) %>%
+  filter(edge != 0 & value > 5)%>% unique() %>% filter(name != "chatter") %>%
+  select(name,X) %>% data.frame()
+
+sm_net_list = split(x = sm_net$name,f=sm_net$X) 
+sm_net_list <- as(sm_net_list,"transactions")
+
+topic_assoc = apriori(sm_net_list, 
+	parameter=list(support=.01, confidence=.5, maxlen=2))
+
+
+plot(head(topic_assoc, 25, by='lift'), method="graph" )
+
+inspect(subset(topic_assoc, lift > 1))
+plot(head(topic_assoc, 100, by='lift'))
+plot(musicrules,method = 'graph')
+```
+
+We removed the "chatter" category because everyone chatters now and then. Instead, we look at the likelihood of people to talk about a topic based on talking about another. The visualization above creates groups based on people's likely topics of conversation. Though most of these seem intuitive, the clear topic groupings. 
+
+The size of each node represents the amount of times it appeared in the data, meaning a higher share of the audience consistently talked about the topic. From this we see multiple clear segments; 
+
+1. An outdoorsy, personal health and fitness type consumer, likely to be marketed to via signage and retail placement.
+
+2. An online gaming college student consumer, likely to be marketed to on Twitch and other gaming-oriented social media sites.
+
+3. A beauty, cooking, fashion, and photo sharing consumer, likely marketed to on Instagram.
+
+4. Politics, news, travel, and automotive interested consumer, likely marketed to on Facebook and Twitter.
+
+5. The food, religion, parenting consumer, who may be more difficult to reach in a measured way due to the low relative concentration on any particular digital media. Grocery stores and traditional media would be likely places to build your brand.
+
+```{r eval=FALSE,echo=FALSE}
+sm1 <- sm %>%
+  column_to_rownames("X")
+#sm1 <- merge(sm1,apply(X = sm1,FUN = sum,MARGIN = 1),by=0) %>% column_to_rownames("Row.names") %>%
+#  rename("Total" = "y")
+sm_scl <- sm1 #%>% scale(center=T,scale = T) 
+
+  mu = attr(sm_scl,"scaled:center")
+  sigma = attr(sm_scl,"scaled:scale")
+
+
+clust1 <- kmeanspp(sm_scl,k = 5)
+sm_scl <- data.frame(sm_scl)
+```
+
+```{r eval=FALSE,echo=FALSE}
+
+PCAsm <- prcomp(sm_scl,rank=5)
+summary(PCAsm)
+sm_x <- PCAsm$rotation
+sm_x %>% data.frame() %>% arrange(desc(PC1))
+PCAx <- PCAsm$x
+
+sm_scl$Total = apply(X=sm_scl,FUN=sum,MARGIN = 1)
+sm_scl$cluster <- clust1$cluster
+sm_scl$PC1 <- PCAx[,1]
+sm_scl$PC2 <- PCAx[,2]
+sm_scl$PC3 <- PCAx[,3]
+
+ggplot(data=sm_scl)+
+geom_point(aes(cluster, fashion, color=Total),alpha=.4)
+```
+
+Referring to the top 10 topics, however, we emphasize the priority of 
+
