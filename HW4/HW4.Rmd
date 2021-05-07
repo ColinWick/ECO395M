@@ -1,8 +1,9 @@
 ---
 title: "Excersize 4"
 author: "Colin Wick"
-date: "5/4/2021"
-output: html_document
+date: "Last compiled on `r format(Sys.time(), '%d %B, %Y')`"
+output: github_document
+always_allow_html: true
 ---
 
 ```{r head,echo = F,message = F,warning = F}
@@ -15,15 +16,43 @@ library(LICORS)
 library(igraph)
 library(arules)
 library(arulesViz)
+library(tidyverse)
+library(ggthemes)
+library(tictoc)
+library(kableExtra)
+library("modelsummary")
+library("skimr")
+library("estimatr")
+library("janitor")
+library("tidymodels")
+library("patchwork")
+library(arules)
+library(arulesViz)
+library("tm")
+library(wordcloud)
+library(SnowballC)
+library(LICORS)
+library(mosaic)
+library("pander")
+library(viridis)
+library(stargazer)
+library(ggcorrplot)
+library("readtext")
+library("e1071")
+library("gmodels")
+
+options(scipen = 999) 
 ```
 
 
-# Question 1
+# Question 1 - Wine Classification
 
 ```{r load-data-1}
 wine <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/wine.csv") %>%
   mutate(red = ifelse(color=="red",1,0))
 ```
+
+### Clustering Color
 
 ```{r clustering-wine-color}
 ## Color clusters
@@ -36,8 +65,10 @@ merge(wine,wine_col_hcl$cluster,by=0) %>%
   rename("cluster" = y) %>% mutate(cluster=factor(cluster)) %>%
   count(cluster,color) %>% group_by(color) %>%
   mutate(prop = prop.table(n)) %>% select(-n) %>%
-  pivot_wider(id_cols = cluster,names_from = color,values_from = prop) 
+  pivot_wider(id_cols = cluster,names_from = color,values_from = prop) %>% kableExtra::kbl() %>% kableExtra::kable_minimal()
 ```
+
+A quick clustering method easily classifies 98% of each wine color, which is hard to beat.
 
 ```{r clustering-wine-quality}
 qual_levels <- levels(factor(wine$quality))  
@@ -59,6 +90,7 @@ merge(wine,wine_qual_hcl$cluster,by.x=0,by.y=0) %>%
   geom_jitter(aes(x=cluster,y=quality,color=color),alpha=.3)
 ```
 
+Running clustering algorithm on quality does not yield the same results. The algorithm successfully predicted color but only loosely predicts quality. Notice clusters 1, 2, and 3 which have higher quality concentrations but did not adequately cluster.
 
 ```{r PCA-color}
 wine_col <- wine %>% select(-color) %>% select(-red)
@@ -74,10 +106,10 @@ PCAwine_summary <- PCAwine$rotation %>%
 merge(wine, PCAwine$x[,1:2], by="row.names") %>%
   ggplot()+
   geom_violin(aes(x=factor(color),y=PC1))
-
-cormatrix <- merge(wine, PCAwine$x[,1:2], by=0) %>% select(-Row.names,-color) %>% cor()
-  ggcorrplot::ggcorrplot(corr = cormatrix)
 ```
+
+PCA somewhat successfully predicts wine color, but not as well as clustering. This is an artifact of the clustering algorithm's neccesary binning while PCA can have a smoother distribution across factors.
+
 
 ```{r PCA-quality}
 wine_col <- wine %>% select(-color) %>% select(-quality)
@@ -100,11 +132,11 @@ wine_pca <- merge(wine, PCAwine$x[,1:7], by=0)
 
 lm1 <- lm(data=wine_pca,quality ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7)
 plot(data=wine_pca,quality ~ lm1$fitted.values)
-
-summary(lm1)
 ```
 
-# Question 2
+Running a linear regression on the 7 PCAs, we find that each PC vector slightly predicts quality, but none in particular are selecting for quality, so we would need to introduce an absurd number of PCAs to the system. At that point, we may as well just predict using the features themselves.
+
+# Question 2 - Social Marketing
 
 ```{r}
 sm <- read.csv("https://raw.githubusercontent.com/jgscott/ECO395M/master/data/social_marketing.csv")
@@ -260,19 +292,22 @@ From the visualizations and the summaries of item pairs, I recommend the followi
 First, we load the data.
 
 ```{r}
+
 ## Collect data
 # training data
-Data_train <- readtext(Sys.glob('../../ECO395M/data/ReutersC50/C50train/*'))
+
+Data_train <- readtext(file = '../../../../../GitHub/ECO395M/data/ReutersC50/C50train/*')
+
 # head(Data_train$text, n = 1)
 # testing data
-Data_test <- readtext(Sys.glob('../../ECO395M/data/ReutersC50/C50test/*'))
+Data_test <- readtext(Sys.glob('../../../../../GitHub/ECO395M/data/ReutersC50/C50test/*'))
 ```
 
 Then we pull author names from the file directory and assign them to texts, and do a check to make sure it worked as expected.
 
 ```{r}
 # author names
-author_names <- as.data.frame(rep(basename(list.dirs('../../ECO395M/data/ReutersC50/C50train')), each = 50))
+author_names <- as.data.frame(rep(basename(list.dirs('../../../../../GitHub/ECO395M/data/ReutersC50/C50train')), each = 50))
 author_names <- author_names[-(1:50),]
 # assign author name to Text
 Data_test$author <- author_names
@@ -325,7 +360,7 @@ train_dtm <- DocumentTermMatrix(train_corpus)
 
 Finally, with the document-term matrices, I use a naive-bayes classifier to predict the author of the text using a dictionary of words unique to each article.
 
-```{r}
+```{r, echo=T}
 ## Naive Bayes Classification
 freq_words <- findFreqTerms(train_dtm, 5)
 # saving List using Dictionary() Function
